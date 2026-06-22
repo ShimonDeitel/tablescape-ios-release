@@ -1,242 +1,248 @@
 import SwiftUI
-import Charts
 
 struct InsightsView: View {
     @EnvironmentObject var appModel: AppModel
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
 
-    @State private var selectedSegment = 0
-    private let segments = ["History", "Dual Wave", "Insights"]
+    @State private var selectedSeason: String? = nil
+    @State private var selectedTheme: TableTheme? = nil
+    @State private var showDetail = false
+    @State private var tab: InsightsTab = .archive
+
+    enum InsightsTab: String, CaseIterable {
+        case archive = "Archive"
+        case saved = "Saved"
+        case tried = "Tried"
+    }
+
+    var filteredThemes: [TableTheme] {
+        appModel.themes(forSeason: selectedSeason)
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 QMBackground()
-
-                if !store.isPro {
-                    VStack(spacing: 16) {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 48))
-                            .foregroundStyle(Color.qmAccent)
-                        Text("Tideline Pro Required")
-                            .font(.title2.weight(.bold))
-                        Text("Unlock multi-month history, dual-wave comparison and insights.")
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 32)
-                        Button("Dismiss") { dismiss() }
-                            .softButton()
-                    }
-                } else {
-                    ScrollView {
-                        VStack(spacing: 24) {
-                            Picker("View", selection: $selectedSegment) {
-                                ForEach(0..<segments.count, id: \.self) { i in
-                                    Text(segments[i]).tag(i)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.horizontal, 16)
-
-                            switch selectedSegment {
-                            case 0: historySection
-                            case 1: dualWaveSection
-                            default: insightsSection
-                            }
-
-                            Spacer(minLength: 32)
+                VStack(spacing: 0) {
+                    // Segment picker
+                    Picker("Tab", selection: $tab) {
+                        ForEach(InsightsTab.allCases, id: \.self) { t in
+                            Text(t.rawValue).tag(t)
                         }
-                        .padding(.top, 8)
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .padding(.bottom, 12)
+
+                    switch tab {
+                    case .archive:
+                        archiveList
+                    case .saved:
+                        savedList
+                    case .tried:
+                        triedList
                     }
                 }
             }
-            .navigationTitle("Insights")
+            .navigationTitle("Tablescape Pro")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     Button("Done") { dismiss() }
+                        .foregroundStyle(Color.qmAccent)
                 }
+            }
+        }
+        .sheet(isPresented: $showDetail) {
+            if let t = selectedTheme {
+                ThemeDetailView(theme: t)
+                    .environmentObject(appModel)
+                    .environmentObject(store)
             }
         }
     }
 
-    // MARK: - History
-    private var historySection: some View {
-        VStack(spacing: 16) {
-            // Full history chart
-            if appModel.allEntries.isEmpty {
-                Text("No data yet. Start logging your energy each day.")
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(32)
-            } else {
-                let sorted = appModel.allEntries.sorted { $0.date < $1.date }
-                Chart {
-                    ForEach(Array(sorted.enumerated()), id: \.offset) { idx, entry in
-                        LineMark(
-                            x: .value("Day", idx),
-                            y: .value("Level", entry.level)
-                        )
-                        .foregroundStyle(Color.qmAccent)
-                        .lineStyle(StrokeStyle(lineWidth: 2))
-                        .interpolationMethod(.catmullRom)
+    // MARK: - Archive Tab
 
-                        AreaMark(
-                            x: .value("Day", idx),
-                            yStart: .value("Base", 0),
-                            yEnd: .value("Level", entry.level)
-                        )
-                        .foregroundStyle(Color.qmAccent.opacity(0.15))
-                        .interpolationMethod(.catmullRom)
+    private var archiveList: some View {
+        VStack(spacing: 0) {
+            // Season filter
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    filterPill("All", isSelected: selectedSeason == nil) {
+                        selectedSeason = nil
                     }
-                }
-                .chartYScale(domain: 0...10)
-                .chartXAxis(.hidden)
-                .frame(height: 180)
-                .padding(.horizontal, 16)
-
-                // Entry list
-                LazyVStack(spacing: 1) {
-                    ForEach(sorted.reversed()) { entry in
-                        HStack {
-                            Text(entry.date, style: .date)
-                                .font(.subheadline)
-                            Spacer()
-                            Text(entry.partOfDay.capitalized)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("\(entry.level)")
-                                .font(.headline.monospacedDigit())
-                                .foregroundStyle(Color.qmAccent)
-                                .frame(width: 28, alignment: .trailing)
+                    ForEach(appModel.allSeasons, id: \.self) { season in
+                        filterPill(season, isSelected: selectedSeason == season) {
+                            selectedSeason = selectedSeason == season ? nil : season
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.qmCard)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .padding(.horizontal, 16)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
             }
-        }
-    }
 
-    // MARK: - Dual Wave
-    private var dualWaveSection: some View {
-        VStack(spacing: 16) {
-            Text("Morning vs Evening")
-                .font(.headline)
-
-            let mornings = appModel.allEntries.filter { $0.partOfDay == "morning" }.sorted { $0.date < $1.date }
-            let evenings = appModel.allEntries.filter { $0.partOfDay == "evening" }.sorted { $0.date < $1.date }
-
-            if mornings.isEmpty && evenings.isEmpty {
-                Text("Use the morning/evening toggle when logging to see your dual-wave comparison.")
+            if filteredThemes.isEmpty {
+                Spacer()
+                Text("No themes found.")
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(32)
+                Spacer()
             } else {
-                Chart {
-                    ForEach(Array(mornings.enumerated()), id: \.offset) { idx, entry in
-                        LineMark(
-                            x: .value("Day", idx),
-                            y: .value("Morning", entry.level),
-                            series: .value("Time", "Morning")
-                        )
+                List {
+                    ForEach(filteredThemes, id: \.id) { theme in
+                        themeRow(theme)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                Haptics.tap()
+                                selectedTheme = theme
+                                showDetail = true
+                            }
+                    }
+                    .listRowBackground(Color.qmCard)
+                }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
+            }
+        }
+    }
+
+    // MARK: - Saved Tab
+
+    private var savedList: some View {
+        Group {
+            if appModel.savedThemes.isEmpty {
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: "bookmark")
+                        .font(.system(size: 44, weight: .light))
                         .foregroundStyle(Color.qmAccent)
-                        .interpolationMethod(.catmullRom)
-                    }
-                    ForEach(Array(evenings.enumerated()), id: \.offset) { idx, entry in
-                        LineMark(
-                            x: .value("Day", idx),
-                            y: .value("Evening", entry.level),
-                            series: .value("Time", "Evening")
-                        )
-                        .foregroundStyle(Color.qmCorrect)
-                        .interpolationMethod(.catmullRom)
-                    }
+                    Text("No saved themes yet.")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Tap the bookmark on any theme to save it here.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                    Spacer()
                 }
-                .chartYScale(domain: 0...10)
-                .chartXAxis(.hidden)
-                .chartLegend(.visible)
-                .frame(height: 180)
-                .padding(.horizontal, 16)
-
-                HStack(spacing: 16) {
-                    HStack(spacing: 6) {
-                        Circle().fill(Color.qmAccent).frame(width: 10, height: 10)
-                        Text("Morning").font(.caption).foregroundStyle(.secondary)
+            } else {
+                List {
+                    ForEach(appModel.savedThemes, id: \.id) { saved in
+                        if let theme = appModel.allThemes.first(where: { $0.id == saved.themeId }) {
+                            themeRow(theme)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    Haptics.tap()
+                                    selectedTheme = theme
+                                    showDetail = true
+                                }
+                        }
                     }
-                    HStack(spacing: 6) {
-                        Circle().fill(Color.qmCorrect).frame(width: 10, height: 10)
-                        Text("Evening").font(.caption).foregroundStyle(.secondary)
-                    }
+                    .listRowBackground(Color.qmCard)
                 }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
             }
         }
-        .padding(.horizontal, 16)
     }
 
-    // MARK: - Insights
-    private var insightsSection: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 12) {
-                MetricTile(
-                    value: String(format: "%.1f", appModel.sevenDayAverage),
-                    label: "7-day avg"
-                )
-                MetricTile(
-                    value: "\(appModel.currentStreak)",
-                    label: "Day streak"
-                )
-                MetricTile(
-                    value: appModel.bestTimeOfDay,
-                    label: "Best time"
-                )
-            }
+    // MARK: - Tried Tab
 
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Energy Insights")
-                    .font(.headline)
-
-                insightRow(
-                    icon: "sun.max",
-                    title: "Best time of day",
-                    value: appModel.bestTimeOfDay
-                )
-                insightRow(
-                    icon: "flame",
-                    title: "Current streak",
-                    value: "\(appModel.currentStreak) days"
-                )
-                insightRow(
-                    icon: "chart.line.uptrend.xyaxis",
-                    title: "Total entries",
-                    value: "\(appModel.allEntries.count)"
-                )
-                insightRow(
-                    icon: "waveform.path.ecg",
-                    title: "Average energy",
-                    value: String(format: "%.1f / 10", appModel.sevenDayAverage)
-                )
+    private var triedList: some View {
+        Group {
+            if appModel.triedLogs.isEmpty {
+                VStack(spacing: 16) {
+                    Spacer()
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 44, weight: .light))
+                        .foregroundStyle(Color.qmAccent)
+                    Text("Nothing tried yet.")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+                    Text("Open a theme and mark it as tried to track your hosting history.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                    Spacer()
+                }
+            } else {
+                List {
+                    ForEach(appModel.triedLogs, id: \.id) { log in
+                        if let theme = appModel.allThemes.first(where: { $0.id == log.themeId }) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                themeRow(theme)
+                                if !log.notes.isEmpty {
+                                    Text(log.notes)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                                Text(log.triedDate.formatted(date: .abbreviated, time: .omitted))
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                Haptics.tap()
+                                selectedTheme = theme
+                                showDetail = true
+                            }
+                        }
+                    }
+                    .listRowBackground(Color.qmCard)
+                }
+                .listStyle(.insetGrouped)
+                .scrollContentBackground(.hidden)
             }
-            .qmCard()
         }
-        .padding(.horizontal, 16)
     }
 
-    private func insightRow(icon: String, title: String, value: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .foregroundStyle(Color.qmAccent)
-                .frame(width: 24)
-            Text(title)
-                .font(.subheadline)
+    // MARK: - Helpers
+
+    private func themeRow(_ theme: TableTheme) -> some View {
+        HStack(spacing: 14) {
+            // Mini palette
+            HStack(spacing: 4) {
+                ForEach(theme.palette.prefix(3), id: \.self) { hex in
+                    Circle()
+                        .fill(Color(hex: hex))
+                        .frame(width: 14, height: 14)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(theme.title)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(theme.season)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
-            Text(value)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+            if appModel.isSaved(theme.id) {
+                Image(systemName: "bookmark.fill")
+                    .font(.caption)
+                    .foregroundStyle(Color.qmAccent)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.tertiary)
         }
+        .padding(.vertical, 4)
+    }
+
+    private func filterPill(_ title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(isSelected ? Color.qmAccent : Color.qmCard, in: Capsule())
+                .foregroundStyle(isSelected ? .white : .primary)
+        }
+        .buttonStyle(.plain)
     }
 }
